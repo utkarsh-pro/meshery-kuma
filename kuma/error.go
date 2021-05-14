@@ -42,7 +42,7 @@ var (
 	ErrOpInvalid = errors.NewDefault(errors.ErrOpInvalid, "Invalid operation")
 )
 
-// ErrInstallMesh is the error for install mesh
+// ErrInstallKuma is the error for install mesh
 func ErrInstallKuma(err error) error {
 	return errors.NewDefault(ErrInstallKumaCode, fmt.Sprintf("Error with kuma operation: %s", err.Error()))
 }
@@ -52,7 +52,8 @@ func ErrMeshConfig(err error) error {
 	return errors.NewDefault(ErrMeshConfigCode, fmt.Sprintf("Error configuration mesh: %s", err.Error()))
 }
 
-// ErrPortForward is the error for mesh port forward
+// ErrFetchManifest is the error occured during the process
+// fetching manifest
 func ErrFetchManifest(err error, des string) error {
 	return errors.NewDefault(ErrFetchManifestCode, fmt.Sprintf("Error fetching mesh manifest: %s", des))
 }
@@ -62,7 +63,7 @@ func ErrClientConfig(err error) error {
 	return errors.NewDefault(ErrClientConfigCode, fmt.Sprintf("Error setting client config: %s", err.Error()))
 }
 
-// ErrPortForward is the error for setting clientset
+// ErrClientSet is the error for setting clientset
 func ErrClientSet(err error) error {
 	return errors.NewDefault(ErrClientSetCode, fmt.Sprintf("Error setting clientset: %s", err.Error()))
 }
@@ -117,4 +118,10 @@ func ErrConvertingAppVersionToChartVersion(err error) error {
 		ErrConvertingAppVersionToChartVersionCode,
 		fmt.Sprintf("error converting app version to chart version: %s", err.Error()),
 	)
+}
+
+// ErrCustomOperation is the error occured during the process of
+// applying custom operation
+func ErrCustomOperation(err error) error {
+	return errors.NewDefault(ErrCustomOperationCode, fmt.Sprintf("Error applying custom operation: %s", err.Error()))
 }

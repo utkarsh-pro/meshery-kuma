@@ -1,22 +1,34 @@
 package kuma
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
-	"os/exec"
-	"path"
-	"runtime"
+	"strings"
 
 	"github.com/layer5io/meshery-adapter-library/adapter"
 	"github.com/layer5io/meshery-adapter-library/status"
-	"github.com/layer5io/meshery-kuma/internal/config"
 	mesherykube "github.com/layer5io/meshkit/utils/kubernetes"
+	"gopkg.in/yaml.v2"
 )
+
+// HelmIndex holds the index.yaml data in the struct format
+type HelmIndex struct {
+	APIVersion string      `yaml:"apiVersion"`
+	Entries    HelmEntries `yaml:"entries"`
+}
+
+// HelmEntries holds the data for all of the entries present
+// in the helm repository
+type HelmEntries map[string][]HelmEntryMetadata
+
+// HelmEntryMetadata is the struct for holding the metadata
+// associated with a helm repositories' entry
+type HelmEntryMetadata struct {
+	APIVersion string `yaml:"apiVersion"`
+	AppVersion string `yaml:"appVersion"`
+	Name       string `yaml:"name"`
+	Version    string `yaml:"version"`
+}
 
 func (kuma *Kuma) installKuma(del bool, namespace string, version string) (string, error) {
 	st := status.Installing
@@ -30,47 +42,17 @@ func (kuma *Kuma) installKuma(del bool, namespace string, version string) (strin
 		return st, ErrMeshConfig(err)
 	}
 
-	manifest, err := kuma.fetchManifest(version)
+	err = kuma.applyHelmChart(del, version, namespace)
 	if err != nil {
-		kuma.Log.Error(ErrInstallKuma(err))
-		return st, ErrInstallKuma(err)
+		return st, ErrApplyHelmChart(err)
 	}
 
-	err = kuma.applyManifest(del, namespace, []byte(manifest))
-	if err != nil {
-		kuma.Log.Error(ErrInstallKuma(err))
-		return st, ErrInstallKuma(err)
-	}
-
+	st = status.Installed
 	if del {
-		return status.Removed, nil
-	}
-	return status.Installed, nil
-}
-
-func (kuma *Kuma) fetchManifest(version string) (string, error) {
-
-	var (
-		out bytes.Buffer
-		er  bytes.Buffer
-	)
-
-	Executable, err := kuma.getExecutable(version)
-	if err != nil {
-		return "", ErrFetchManifest(err, err.Error())
-	}
-	// We need variable executable hence
-	// #nosec
-	command := exec.Command(Executable, "install", "control-plane")
-	command.Stdout = &out
-	command.Stderr = &er
-	err = command.Run()
-	if err != nil {
-		kuma.Log.Info(out.String())
-		return "", ErrFetchManifest(err, er.String())
+		st = status.Removed
 	}
 
-	return out.String(), nil
+	return st, nil
 }
 
 func (kuma *Kuma) applyManifest(del bool, namespace string, contents []byte) error {
@@ -87,160 +69,93 @@ func (kuma *Kuma) applyManifest(del bool, namespace string, contents []byte) err
 	return nil
 }
 
-// getExecutable looks for the executable in
-// 1. $PATH
-// 2. Root config path
-//
-// If it doesn't find the executable in the path then it proceeds
-// to download the binary from github releases and installs it
-// in the root config path
-func (kuma *Kuma) getExecutable(release string) (string, error) {
-	const binaryName = "kumactl"
-	alternateBinaryName := "kumactl-" + release
+func (kuma *Kuma) applyHelmChart(del bool, version, namespace string) error {
+	kClient := kuma.MesheryKubeclient
 
-	// Look for the executable in the path
-	kuma.Log.Info("Looking for kuma in the path...")
-	executable, err := exec.LookPath(binaryName)
-	if err == nil {
-		return executable, nil
-	}
-	executable, err = exec.LookPath(alternateBinaryName)
-	if err == nil {
-		return executable, nil
-	}
+	repo := "https://kumahq.github.io/charts"
+	chart := "kuma"
 
-	// Look for config in the root path
-	binPath := path.Join(config.RootPath(), "bin")
-	kuma.Log.Info("Looking for kuma in", binPath, "...")
-	executable = path.Join(binPath, alternateBinaryName)
-	if _, err := os.Stat(executable); err == nil {
-		return executable, nil
-	}
-
-	// Proceed to download the binary in the config root path
-	kuma.Log.Info("kuma not found in the path, downloading...")
-	res, err := downloadBinary(os.Getenv("DISTRO"), runtime.GOARCH, release)
+	chartVersion, err := ConvertAppVersionToChartVersion(repo, chart, version)
 	if err != nil {
-		return "", ErrGetKumactl(err)
-	}
-	// Install the binary
-	kuma.Log.Info("Installing...")
-	if err = installBinary(path.Join(binPath, alternateBinaryName), runtime.GOOS, res); err != nil {
-		return "", ErrGetKumactl(err)
+		return ErrConvertingAppVersionToChartVersion(err)
 	}
 
-	// Move binary to the right location
-	err = os.Rename(path.Join(binPath, alternateBinaryName, "kuma-"+release, "bin", "kumactl"), path.Join(binPath, "kumactl"))
-	if err != nil {
-		return "", ErrGetKumactl(err)
-	}
+	err = kClient.ApplyHelmChart(mesherykube.ApplyHelmChartConfig{
+		ChartLocation: mesherykube.HelmChartLocation{
+			Repository: repo,
+			Chart:      chart,
+			Version:    chartVersion,
+		},
+		Namespace:       namespace,
+		Delete:          del,
+		CreateNamespace: true,
+	})
 
-	// Cleanup
-	kuma.Log.Info("Cleaning up...")
-	if err = os.RemoveAll(path.Join(binPath, alternateBinaryName)); err != nil {
-		return "", ErrGetKumactl(err)
-	}
-
-	if err = os.Rename(path.Join(binPath, "kumactl"), path.Join(binPath, alternateBinaryName)); err != nil {
-		return "", ErrGetKumactl(err)
-	}
-
-	// Set permissions
-	// Permsission has to be +x to be able to run the binary
-	// #nosec
-	if err = os.Chmod(path.Join(binPath, alternateBinaryName), 0750); err != nil {
-		return "", ErrGetKumactl(err)
-	}
-
-	kuma.Log.Info("Done")
-	return path.Join(binPath, alternateBinaryName), nil
+	return err
 }
 
-func downloadBinary(platform, arch, release string) (*http.Response, error) {
-	var url = fmt.Sprintf("https://kong.bintray.com/kuma/kuma-%s-%s-%s.tar.gz", release, platform, arch)
+// ConvertAppVersionToChartVersion takes in the repo, chart and app version and
+// returns the corresponding chart version for the same
+func ConvertAppVersionToChartVersion(repo, chart, appVersion string) (string, error) {
+	appVersion = normalizeVersion(appVersion)
 
-	// We need variable url hence
+	helmIndex, err := CreateHelmIndex(repo)
+	if err != nil {
+		return "", ErrCreatingHelmIndex(err)
+	}
+
+	entryMetadata, exists := helmIndex.Entries.GetEntryWithAppVersion(chart, appVersion)
+	if !exists {
+		return "", ErrEntryWithAppVersionNotExists(chart, appVersion)
+	}
+
+	return entryMetadata.Version, nil
+}
+
+// CreateHelmIndex takes in the repo name and creates a
+// helm index for it. Helm index is basically marshalled version of
+// index.yaml file present in the remote helm repository
+func CreateHelmIndex(repo string) (*HelmIndex, error) {
+	url := fmt.Sprintf("%s/index.yaml", repo)
+
+	// helm repository path will alaways be varaible hence,
 	// #nosec
 	resp, err := http.Get(url)
-	if err != nil {
-		return nil, ErrDownloadBinary(err)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return nil, ErrHelmRepositoryNotFound(repo, err)
 	}
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, ErrDownloadBinary(fmt.Errorf("binary not found, possibly the operating system is not supported"))
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, ErrDownloadBinary(fmt.Errorf("bad status: %s", resp.Status))
-	}
-
-	return resp, nil
-}
-
-func installBinary(location, platform string, res *http.Response) error {
-	// Close the response body
 	defer func() {
-		if err := res.Body.Close(); err != nil {
-			fmt.Println(err)
-		}
+		_ = resp.Body.Close()
 	}()
 
-	err := os.MkdirAll(location, 0750)
-	if err != nil {
-		return err
+	var hi HelmIndex
+	dec := yaml.NewDecoder(resp.Body)
+	if err := dec.Decode(&hi); err != nil {
+		return nil, ErrDecodeYaml(err)
 	}
 
-	switch platform {
-	case "darwin":
-		fallthrough
-	case "linux":
-		uncompressedStream, err := gzip.NewReader(res.Body)
-		if err != nil {
-			return err
-		}
+	return &hi, nil
+}
 
-		tarReader := tar.NewReader(uncompressedStream)
-
-		for {
-			header, err := tarReader.Next()
-
-			if err == io.EOF {
-				break
-			}
-
-			if err != nil {
-				return ErrInstallBinary(err)
-			}
-
-			switch header.Typeflag {
-			case tar.TypeDir:
-				// File traversal is required to store the binary at the right place
-				// #nosec
-				if err := os.MkdirAll(path.Join(location, header.Name), 0750); err != nil {
-					return ErrInstallBinary(err)
-				}
-			case tar.TypeReg:
-				// File traversal is required to store the binary at the right place
-				// #nosec
-				outFile, err := os.Create(path.Join(location, header.Name))
-				if err != nil {
-					return ErrInstallBinary(err)
-				}
-				// Trust kuma tar
-				// #nosec
-				if _, err := io.Copy(outFile, tarReader); err != nil {
-					return ErrInstallBinary(err)
-				}
-				if err = outFile.Close(); err != nil {
-					return ErrInstallBinary(err)
-				}
-
-			default:
-				return ErrInstallBinary(err)
-			}
-		}
-	case "windows":
+// GetEntryWithAppVersion takes in the entry name and the appversion and returns the corresponding
+// metadata for the parameters if it exists
+func (helmEntries HelmEntries) GetEntryWithAppVersion(entry, appVersion string) (HelmEntryMetadata, bool) {
+	hem, ok := helmEntries[entry]
+	if !ok {
+		return HelmEntryMetadata{}, false
 	}
 
-	return nil
+	for _, v := range hem {
+		if v.Name == entry && v.AppVersion == appVersion {
+			return v, true
+		}
+	}
+
+	return HelmEntryMetadata{}, false
+}
+
+// normalizeVerion takes in a version and removes "v" prefix
+// if it is present
+func normalizeVersion(version string) string {
+	return strings.TrimPrefix(version, "v")
 }

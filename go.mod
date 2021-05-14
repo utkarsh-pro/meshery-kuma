@@ -3,13 +3,13 @@ module github.com/layer5io/meshery-kuma
 go 1.13
 
 replace (
-	github.com/kudobuilder/kuttl => github.com/layer5io/kuttl v0.4.1-0.20200806180306-b7e46afd657f
-	vbom.ml/util => github.com/fvbommel/util v0.0.0-20180919145318-efcd4e0f9787
+	github.com/kudobuilder/kuttl => github.com/layer5io/kuttl v0.4.1-0.20200723152044-916f10574334
+	gopkg.in/ini.v1 => github.com/go-ini/ini v1.62.0
 )
 
 require (
-	github.com/layer5io/meshery-adapter-library v0.1.7
-	github.com/layer5io/meshkit v0.1.28
-	google.golang.org/grpc v1.33.1 // indirect
+	github.com/layer5io/meshery-adapter-library v0.1.15
+	github.com/layer5io/meshkit v0.2.10
+	gopkg.in/yaml.v2 v2.3.0
 	helm.sh/helm/v3 v3.3.4 // indirect
 )

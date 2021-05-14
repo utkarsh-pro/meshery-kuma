@@ -10,6 +10,7 @@ replace (
 require (
 	github.com/layer5io/meshery-adapter-library v0.1.15
 	github.com/layer5io/meshkit v0.2.10
+	github.com/layer5io/service-mesh-performance v0.3.2
 	gopkg.in/yaml.v2 v2.3.0
 	helm.sh/helm/v3 v3.3.4 // indirect
 )

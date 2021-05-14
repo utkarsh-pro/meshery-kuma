@@ -14,6 +14,9 @@ var (
 	ErrClientSetCode     = "kuma_test_code"
 	ErrStreamEventCode   = "kuma_test_code"
 	ErrSampleAppCode     = "kuma_test_code"
+	// ErrCustomOperationCode represents the errors which are generated
+	// during the process of handeling a custom process
+	ErrCustomOperationCode = "kuma_test_code"
 
 	// ErrCreatingHelmIndexCode represents the errors which are generated
 	// during creation of helm index
